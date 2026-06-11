@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TW Paper-Trade NAV Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2129; --border: #2a3441;
+    --text: #d8e1ea; --muted: #7d8b99;
+    --up: #4ade80; --down: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font-family: "Helvetica Neue", Arial, "Noto Sans TC", sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: .85rem; margin-bottom: 20px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px; margin-bottom: 18px;
+  }
+  .chart-box { position: relative; height: 380px; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: .8rem; }
+  tr:last-child td { border-bottom: none; }
+  .tag {
+    display: inline-block; font-size: .7rem; padding: 1px 7px; border-radius: 9px;
+    margin-left: 8px; vertical-align: 1px;
+  }
+  .tag-s { background: #1e3a5f; color: #93c5fd; }
+  .tag-b { background: #3b3326; color: #fbbf24; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .foot { color: var(--muted); font-size: .75rem; line-height: 1.5; }
+  #err { color: var(--down); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>台股紙上交易 NAV 追蹤</h1>
+  <div class="sub" id="meta">載入中…</div>
+
+  <div class="panel chart-box"><canvas id="chart"></canvas></div>
+
+  <div class="panel">
+    <table id="tbl">
+      <thead><tr><th>系列</th><th>NAV</th><th>累計報酬</th><th>當日</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="foot">
+    四個量化策略（紙上交易，無真實資金）與三個基準的前瞻 NAV，基期 = 上線日 10.0。
+    本機 pipeline 每個交易日收盤後自動更新。僅供研究紀錄，非投資建議。
+  </div>
+  <div id="err"></div>
+</div>
+
+<script>
+const PALETTE = {
+  "gp_a+ep":            "#60a5fa",
+  "foreign_hold":       "#a78bfa",
+  "concentrated20":     "#34d399",
+  "concentrated20_chip":"#f472b6",
+  "EW-150":             "#9ca3af",
+  "0050":               "#fbbf24",
+  "TAIEX":              "#fb923c",
+};
+
+fetch("data/nav.json?t=" + Date.now())
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(render)
+  .catch(e => { document.getElementById("err").textContent = "資料載入失敗：" + e; });
+
+function render(d) {
+  document.getElementById("meta").textContent =
+    `asof ${d.asof}・上線 ${d.go_live}・基期 NAV = ${d.base.toFixed(1)}`;
+
+  const isBench = c => d.benchmarks.includes(c);
+  const cols = [...d.strategies, ...d.benchmarks];
+
+  new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: {
+      labels: d.dates,
+      datasets: cols.map(c => ({
+        label: c,
+        data: d.series[c],
+        borderColor: PALETTE[c] || "#888",
+        backgroundColor: PALETTE[c] || "#888",
+        borderWidth: isBench(c) ? 1.2 : 2,
+        borderDash: isBench(c) ? [5, 4] : [],
+        pointRadius: 2, pointHoverRadius: 4, tension: 0.15,
+      })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: "#d8e1ea", boxWidth: 18, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(4)} ` +
+                          `(${((ctx.parsed.y / d.base - 1) * 100).toFixed(2)}%)`,
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: "#7d8b99", font: { size: 11 } }, grid: { color: "#222b35" } },
+        y: { ticks: { color: "#7d8b99", font: { size: 11 } }, grid: { color: "#222b35" } },
+      },
+    },
+  });
+
+  const tb = document.querySelector("#tbl tbody");
+  const last = d.dates.length - 1;
+  for (const c of cols) {
+    const v = d.series[c][last];
+    const prev = last > 0 ? d.series[c][last - 1] : null;
+    const tot = (v / d.base - 1) * 100;
+    const day = prev ? (v / prev - 1) * 100 : null;
+    const cls = x => x >= 0 ? "up" : "down";
+    const tag = isBench(c) ? '<span class="tag tag-b">基準</span>'
+                           : '<span class="tag tag-s">策略</span>';
+    tb.insertAdjacentHTML("beforeend",
+      `<tr><td>${c}${tag}</td><td>${v.toFixed(4)}</td>` +
+      `<td class="${cls(tot)}">${tot >= 0 ? "+" : ""}${tot.toFixed(2)}%</td>` +
+      `<td class="${cls(day ?? 0)}">${day === null ? "—" : (day >= 0 ? "+" : "") + day.toFixed(2) + "%"}</td></tr>`);
+  }
+}
+</script>
+</body>
+</html>
